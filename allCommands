@@ -1,0 +1,21 @@
+Go
+go get github.com/jepsen-io/maelstrom/demo/go
+go install .
+
+Challenge-1
+./maelstrom test -w echo --bin ~/go/bin/maelstrom-echo --node-count 1 --time-limit 10
+Challenge-2
+./maelstrom test -w unique-ids --bin ~/go/bin/maelstrom-unique-ids --time-limit 3 --rate 10 --node-count 2 --availability total --nemesis partition
+./maelstrom test -w unique-ids --bin ~/go/bin/maelstrom-unique-ids --time-limit 30 --rate 1000 --node-count 3 --availability total --nemesis partition
+./maelstrom test -w unique-ids --bin ~/go/bin/maelstrom-unique-ids --time-limit 10 --rate 10000 --node-count 3 --availability total --nemesis partition
+./maelstrom test -w unique-ids --bin ~/go/bin/maelstrom-unique-ids --time-limit 5 --rate 1000000000000 --node-count 3 --availability total --nemesis partition
+Challenge-3-a
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 1 --time-limit 20 --rate 10
+Challenge-3-b
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 5 --time-limit 20 --rate 10
+challenge-3-c
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 5 --time-limit 20 --rate 10 --nemesis partition
+challenge-3-d-1
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 25 --time-limit 20 --rate 100 --latency 100
+challenge-3-d-2
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 25 --time-limit 20 --rate 100 --latency 100
