@@ -1,1 +1,16 @@
-./store/
+/target
+/classes
+/checkouts
+/class
+store/
+/pom.xml
+/pom.xml.asc
+*.log
+.*.swp
+~.*
+*.jar
+*.class
+/.lein-*
+/.nrepl-port
+.hgignore
+.hg/
