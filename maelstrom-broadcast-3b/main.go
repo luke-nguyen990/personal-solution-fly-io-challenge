@@ -16,14 +16,10 @@ const (
 
 type server struct {
 	n      *maelstrom.Node
-	values map[float64]bool
+	values map[float64]struct{}
 }
 
 func (s *server) HandleRead(msg maelstrom.Message) error {
-	var request map[string]any
-	if err := json.Unmarshal(msg.Body, &request); err != nil {
-		return err
-	}
 	var messages []float64
 	for key := range s.values {
 		messages = append(messages, key)
@@ -36,14 +32,19 @@ func (s *server) HandleRead(msg maelstrom.Message) error {
 }
 
 func (s *server) HandleBroadcast(msg maelstrom.Message) error {
-	var request map[string]any
+	type broadcastMsg struct {
+		Type      string              `json:"type"`
+		Message   float64             `json:"message,omitempty"`
+		Broadcast map[string][]string `json:"Broadcast,omitempty"`
+	}
+	var request broadcastMsg
 	if err := json.Unmarshal(msg.Body, &request); err != nil {
 		return err
 	}
-	if _, existed := s.values[request["message"].(float64)]; existed {
+	if _, existed := s.values[request.Message]; existed {
 		return nil
 	}
-	s.values[request["message"].(float64)] = true
+	s.values[request.Message] = struct{}{}
 	for _, dest := range s.n.NodeIDs() {
 		s.n.RPC(dest, msg.Body, func(msg maelstrom.Message) error {
 			return nil
@@ -56,8 +57,11 @@ func (s *server) HandleBroadcast(msg maelstrom.Message) error {
 }
 
 func (s *server) HandleTopology(msg maelstrom.Message) error {
-	var request map[string]any
-
+	type topologyMsg struct {
+		Type     string              `json:"type"`
+		Topology map[string][]string `json:"topology,omitempty"`
+	}
+	var request topologyMsg
 	if err := json.Unmarshal(msg.Body, &request); err != nil {
 		return err
 	}
@@ -69,7 +73,7 @@ func (s *server) HandleTopology(msg maelstrom.Message) error {
 
 func main() {
 	n := maelstrom.NewNode()
-	s := &server{n: n, values: map[float64]bool{}}
+	s := &server{n: n, values: map[float64]struct{}{}}
 
 	n.Handle(HandleBroadcast, s.HandleBroadcast)
 	n.Handle(HandleRead, s.HandleRead)
