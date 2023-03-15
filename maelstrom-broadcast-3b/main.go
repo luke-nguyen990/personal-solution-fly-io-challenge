@@ -3,64 +3,77 @@ package main
 import (
 	"encoding/json"
 	"log"
+
 	"os"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
+const (
+	HandleRead      string = "read"
+	HandleBroadcast string = "broadcast"
+	HandleTopology  string = "topology"
+)
+
+type server struct {
+	n      *maelstrom.Node
+	values map[float64]bool
+}
+
+func (s *server) HandleRead(msg maelstrom.Message) error {
+	var request map[string]any
+	if err := json.Unmarshal(msg.Body, &request); err != nil {
+		return err
+	}
+	var messages []float64
+	for key := range s.values {
+		messages = append(messages, key)
+	}
+	var response = map[string]any{
+		"type":     "read_ok",
+		"messages": messages,
+	}
+	return s.n.Reply(msg, response)
+}
+
+func (s *server) HandleBroadcast(msg maelstrom.Message) error {
+	var request map[string]any
+	if err := json.Unmarshal(msg.Body, &request); err != nil {
+		return err
+	}
+	if _, existed := s.values[request["message"].(float64)]; existed {
+		return nil
+	}
+	s.values[request["message"].(float64)] = true
+	for _, dest := range s.n.NodeIDs() {
+		s.n.RPC(dest, msg.Body, func(msg maelstrom.Message) error {
+			return nil
+		})
+	}
+	var response = map[string]any{
+		"type": "broadcast_ok",
+	}
+	return s.n.Reply(msg, response)
+}
+
+func (s *server) HandleTopology(msg maelstrom.Message) error {
+	var request map[string]any
+	if err := json.Unmarshal(msg.Body, &request); err != nil {
+		return err
+	}
+	var response = map[string]any{
+		"type": "topology_ok",
+	}
+	return s.n.Reply(msg, response)
+}
+
 func main() {
 	n := maelstrom.NewNode()
-	values := make(map[float64]bool)
+	s := &server{n: n, values: map[float64]bool{}}
 
-	n.Handle("broadcast", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-		value := body["message"].(float64)
-		if _, existed := values[value]; existed {
-			return nil
-		}
-		values[value] = true
-
-		// Broadcast value to all nodes in the network
-		for _, value := range n.NodeIDs() {
-			n.RPC(value, msg.Body, func(msg maelstrom.Message) error {
-				return nil
-			})
-		}
-
-		// Clean-up the message body and reply to the sender
-		body["type"] = "broadcast_ok"
-		delete(body, "message")
-		return n.Reply(msg, body)
-	})
-
-	n.Handle("read", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-		body["type"] = "read_ok"
-		body["messages"] = []float64{}
-
-		for value := range values {
-			body["messages"] = append(body["messages"].([]float64), value)
-		}
-		return n.Reply(msg, body)
-	})
-
-	n.Handle("topology", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		// Clean-up the message body and reply to the sender
-		body["type"] = "topology_ok"
-		delete(body, "topology")
-		return n.Reply(msg, body)
-	})
+	n.Handle(HandleBroadcast, s.HandleBroadcast)
+	n.Handle(HandleRead, s.HandleRead)
+	n.Handle(HandleTopology, s.HandleTopology)
 
 	// Execute the node's message loop. This will run until STDIN is closed.
 	if err := n.Run(); err != nil {
