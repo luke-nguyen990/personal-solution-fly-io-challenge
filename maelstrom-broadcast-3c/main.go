@@ -4,79 +4,92 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-var MAX_REFIRE int = 2
-var RETRY_INTERVAL int = 1000 // in milliseconds
+const (
+	HandleRead      string = "read"
+	HandleBroadcast string = "broadcast"
+	HandleTopology  string = "topology"
+)
+
+const (
+	MaxRoutinesPerBroadcastOp = 20
+	Interval                  = time.Duration(1000) * time.Millisecond
+)
+
+type server struct {
+	n      *maelstrom.Node
+	values map[float64]struct{}
+}
+
+func (s *server) HandleRead(msg maelstrom.Message) error {
+	var messages []float64
+	for key := range s.values {
+		messages = append(messages, key)
+	}
+	var response = map[string]any{
+		"type":     "read_ok",
+		"messages": messages,
+	}
+	return s.n.Reply(msg, response)
+}
+
+func (s *server) HandleBroadcast(msg maelstrom.Message) error {
+	type broadcastMsg struct {
+		Type      string              `json:"type"`
+		Message   float64             `json:"message,omitempty"`
+		Broadcast map[string][]string `json:"Broadcast,omitempty"`
+	}
+	var request broadcastMsg
+	if err := json.Unmarshal(msg.Body, &request); err != nil {
+		return err
+	}
+	if _, existed := s.values[request.Message]; existed {
+		return nil
+	}
+	go func() {
+		s.values[request.Message] = struct{}{}
+		for i := 0; i < MaxRoutinesPerBroadcastOp; i++ {
+			for _, dest := range s.n.NodeIDs() {
+				s.n.RPC(dest, msg.Body, func(msg maelstrom.Message) error {
+					return nil
+				})
+			}
+			time.Sleep(Interval)
+		}
+	}()
+
+	var response = map[string]any{
+		"type": "broadcast_ok",
+	}
+	return s.n.Reply(msg, response)
+}
+
+func (s *server) HandleTopology(msg maelstrom.Message) error {
+	type topologyMsg struct {
+		Type     string              `json:"type"`
+		Topology map[string][]string `json:"topology,omitempty"`
+	}
+	var request topologyMsg
+	if err := json.Unmarshal(msg.Body, &request); err != nil {
+		return err
+	}
+	var response = map[string]any{
+		"type": "topology_ok",
+	}
+	return s.n.Reply(msg, response)
+}
 
 func main() {
 	n := maelstrom.NewNode()
-	values := make(map[float64]bool)
-	var mutex = sync.RWMutex{}
+	s := &server{n: n, values: map[float64]struct{}{}}
 
-	n.Handle("broadcast", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-		value := body["message"].(float64)
-
-		// Add mutex to avoid race condition
-		mutex.Lock()
-		if _, existed := values[value]; existed {
-			return nil
-		}
-		values[value] = true
-		mutex.Unlock()
-
-		// Run goroutines to broadcast asynchronously with multiple requests
-		for threadCounter := 0; threadCounter < MAX_REFIRE; threadCounter++ {
-			go func() {
-				// Broadcast value to all nodes in the network
-				for _, value := range n.NodeIDs() {
-					n.RPC(value, msg.Body, func(msg maelstrom.Message) error {
-						return nil
-					})
-				}
-				time.Sleep(time.Duration(RETRY_INTERVAL) * time.Millisecond)
-			}()
-		}
-
-		// Clean-up the message body and reply to the sender
-		body["type"] = "broadcast_ok"
-		delete(body, "message")
-		return n.Reply(msg, body)
-	})
-
-	n.Handle("read", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-		body["type"] = "read_ok"
-		body["messages"] = []float64{}
-
-		for value := range values {
-			body["messages"] = append(body["messages"].([]float64), value)
-		}
-		return n.Reply(msg, body)
-	})
-
-	n.Handle("topology", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		// Clean-up the message body and reply to the sender
-		body["type"] = "topology_ok"
-		delete(body, "topology")
-		return n.Reply(msg, body)
-	})
+	n.Handle(HandleBroadcast, s.HandleBroadcast)
+	n.Handle(HandleRead, s.HandleRead)
+	n.Handle(HandleTopology, s.HandleTopology)
 
 	// Execute the node's message loop. This will run until STDIN is closed.
 	if err := n.Run(); err != nil {
